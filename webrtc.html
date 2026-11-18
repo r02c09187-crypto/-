@@ -1,0 +1,1255 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WebRTC 通話アプリ</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .mirror {
+      transform: scaleX(-1);
+    }
+    @keyframes pulseRing {
+      0% { transform: scale(0.95); opacity: 0.7; }
+      70% { transform: scale(1.25); opacity: 0; }
+      100% { transform: scale(1.25); opacity: 0; }
+    }
+    .animate-pulse-ring {
+      animation: pulseRing 2s cubic-bezier(0.24, 0, 0.38, 1) infinite;
+    }
+  </style>
+</head>
+<body class="bg-zinc-950 text-zinc-100 min-h-screen flex flex-col items-center justify-center p-3 sm:p-6 selection:bg-emerald-500/30">
+
+  <!-- メインアプリケーションコンテナ -->
+  <main class="w-full max-w-lg bg-zinc-900/95 border border-zinc-800/90 rounded-3xl shadow-2xl overflow-hidden flex flex-col">
+
+    <!-- ヘッダー -->
+    <header class="px-5 py-4 border-b border-zinc-800/80 flex items-center justify-between bg-zinc-900">
+      <div class="flex items-center gap-2.5">
+        <div class="w-9 h-9 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+          <i data-lucide="phone-call" class="w-5 h-5"></i>
+        </div>
+        <div>
+          <h1 class="text-base font-bold tracking-tight text-white leading-tight">WebRTC 通話</h1>
+          <p class="text-[11px] text-zinc-400">ブラウザ間 P2P 音声・ビデオ通話</p>
+        </div>
+      </div>
+
+      <!-- 接続ステータスバッジ -->
+      <div id="status-badge" class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-zinc-800/90 border border-zinc-700/70 text-xs font-medium">
+        <span id="status-dot" class="w-2 h-2 rounded-full bg-zinc-500"></span>
+        <span id="status-text" class="text-zinc-300">待機中</span>
+        <span id="call-timer" class="hidden font-mono text-emerald-400 pl-1 border-l border-zinc-700">00:00</span>
+      </div>
+    </header>
+
+    <!-- メディア権限フォールバック案内バナー -->
+    <div id="permission-banner" class="hidden mx-4 mt-4 p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs flex items-start gap-2.5">
+      <i data-lucide="alert-triangle" class="w-4 h-4 text-amber-400 shrink-0 mt-0.5"></i>
+      <div class="flex-1">
+        <p id="permission-title" class="font-semibold text-amber-300">受信専用モードで動作中</p>
+        <p id="permission-desc" class="text-amber-200/85 mt-0.5 leading-relaxed">マイク・カメラが許可されていないため受信専用モードです。ルームの作成・参加やチャットはそのまま利用できます。</p>
+      </div>
+    </div>
+
+    <!-- ビデオ・音声ステージエリア -->
+    <section class="relative mx-4 mt-4 rounded-2xl bg-zinc-950 border border-zinc-800/90 overflow-hidden aspect-[4/3] sm:aspect-video flex items-center justify-center">
+
+      <!-- リモート映像 -->
+      <video id="remote-video" autoplay playsinline class="hidden w-full h-full object-cover"></video>
+
+      <!-- リモート待機中・音声電話モード表示 -->
+      <div id="remote-placeholder" class="flex flex-col items-center justify-center text-center p-6 z-10">
+        <div class="relative flex items-center justify-center mb-4">
+          <div id="avatar-pulse" class="hidden absolute inset-0 rounded-full bg-emerald-500/30 animate-pulse-ring"></div>
+          <div class="w-20 h-20 rounded-full bg-zinc-900 border-2 border-zinc-800 flex items-center justify-center text-zinc-400 shadow-inner">
+            <i id="remote-avatar-icon" data-lucide="user" class="w-9 h-9"></i>
+          </div>
+        </div>
+        <p id="remote-status-label" class="text-sm font-semibold text-zinc-200">通話相手を待っています</p>
+        <p id="remote-sub-label" class="text-xs text-zinc-500 mt-1">ルームを作成するか、IDを入力して参加してください</p>
+      </div>
+
+      <!-- 自分のワイプ（ピクチャーインピクチャー） -->
+      <div id="local-pip" class="absolute bottom-3 right-3 w-28 sm:w-36 aspect-video rounded-xl bg-zinc-900/95 border border-zinc-700/80 overflow-hidden shadow-lg flex items-center justify-center z-20">
+        <video id="local-video" autoplay muted playsinline class="hidden w-full h-full object-cover mirror"></video>
+        <div id="local-placeholder" class="flex flex-col items-center justify-center text-zinc-500">
+          <i data-lucide="mic" class="w-4 h-4 mb-0.5"></i>
+          <span class="text-[10px]">自分 (音声)</span>
+        </div>
+        <div id="local-mute-badge" class="hidden absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-rose-600 text-white flex items-center justify-center shadow">
+          <i data-lucide="mic-off" class="w-3 h-3"></i>
+        </div>
+      </div>
+
+      <!-- ルームIDオーバーレイ（通話・呼び出し中に表示） -->
+      <div id="active-room-bar" class="hidden absolute top-3 left-3 right-3 z-20 flex items-center justify-between bg-zinc-950/90 backdrop-blur-md border border-zinc-800/90 px-3.5 py-2 rounded-2xl shadow-lg">
+        <div class="flex items-center gap-2 overflow-hidden">
+          <span class="text-[11px] text-zinc-400 shrink-0">ルームID:</span>
+          <code id="display-room-id" class="text-sm font-mono font-bold text-emerald-400 tracking-wider truncate">---</code>
+        </div>
+        <div class="flex items-center gap-1.5 shrink-0">
+          <button id="copy-id-btn" type="button" class="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-medium text-zinc-200 transition active:scale-95" title="ルームIDをコピー">
+            <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+            <span>IDコピー</span>
+          </button>
+          <button id="copy-url-btn" type="button" class="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 text-xs font-medium transition active:scale-95" title="招待URLをコピー">
+            <i data-lucide="link" class="w-3.5 h-3.5"></i>
+            <span>URL</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 診断・接続ステータス詳細バナー -->
+      <div id="diagnostic-banner" class="hidden absolute bottom-3 left-3 right-32 sm:right-40 z-20 bg-zinc-950/95 backdrop-blur-md border border-amber-500/40 rounded-xl p-2.5 text-[11px] text-amber-200 shadow-lg">
+        <div class="flex items-center justify-between gap-1 mb-0.5">
+          <span class="font-bold text-amber-300 flex items-center gap-1">
+            <i data-lucide="info" class="w-3.5 h-3.5 shrink-0"></i>
+            <span id="diagnostic-title">接続情報</span>
+          </span>
+          <button id="retry-sync-btn" type="button" class="hidden px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 font-semibold transition">
+            再接続
+          </button>
+        </div>
+        <p id="diagnostic-message" class="text-zinc-300 leading-snug"></p>
+      </div>
+    </section>
+
+    <!-- コントロール・操作パネル -->
+    <section class="p-4 sm:p-5 flex flex-col gap-4">
+
+      <!-- モード選択 & メディア切り替えボタン -->
+      <div class="flex items-center justify-between gap-2 bg-zinc-950/70 p-2 rounded-2xl border border-zinc-800/80">
+        <!-- 音声のみ / ビデオ通話 切り替え -->
+        <div class="flex items-center bg-zinc-900 p-1 rounded-xl border border-zinc-800">
+          <button id="mode-voice-btn" type="button" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition bg-emerald-600 text-white shadow">
+            <i data-lucide="phone" class="w-3.5 h-3.5"></i>
+            <span>音声通話</span>
+          </button>
+          <button id="mode-video-btn" type="button" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition text-zinc-400 hover:text-zinc-200">
+            <i data-lucide="video" class="w-3.5 h-3.5"></i>
+            <span>ビデオ通話</span>
+          </button>
+        </div>
+
+        <!-- マイク & カメラ 個別オン/オフ -->
+        <div class="flex items-center gap-2">
+          <button id="toggle-mic-btn" type="button" class="w-10 h-10 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white flex items-center justify-center transition active:scale-95 border border-zinc-700/70" title="マイク切り替え">
+            <i data-lucide="mic" class="w-4 h-4"></i>
+          </button>
+          <button id="toggle-cam-btn" type="button" class="w-10 h-10 rounded-xl bg-zinc-800/50 hover:bg-zinc-800 text-zinc-500 flex items-center justify-center transition active:scale-95 border border-zinc-800" title="カメラ切り替え">
+            <i data-lucide="video-off" class="w-4 h-4"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- 待機中のアクションエリア（新規ルーム作成 / ルーム参加） -->
+      <div id="lobby-controls" class="flex flex-col gap-3">
+        <button id="create-room-btn" type="button" class="w-full py-3.5 px-5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-semibold text-sm shadow-lg shadow-emerald-950/50 transition flex items-center justify-center gap-2 cursor-pointer">
+          <i data-lucide="plus-circle" class="w-4 h-4"></i>
+          <span>新しい通話ルームを作成</span>
+        </button>
+
+        <div class="relative flex items-center py-0.5">
+          <div class="flex-grow border-t border-zinc-800"></div>
+          <span class="shrink mx-3 text-[11px] font-medium text-zinc-500">またはルームIDで参加</span>
+          <div class="flex-grow border-t border-zinc-800"></div>
+        </div>
+
+        <form id="join-room-form" class="flex gap-2">
+          <input
+            id="room-id-input"
+            type="text"
+            placeholder="6桁のルームIDを入力 (例: a8k2m9)"
+            autocomplete="off"
+            class="flex-1 bg-zinc-950 border border-zinc-800 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 rounded-2xl px-4 py-3 text-sm text-white placeholder-zinc-500 outline-none font-mono transition"
+          />
+          <button type="submit" class="px-5 py-3 rounded-2xl bg-zinc-800 hover:bg-zinc-700 active:bg-zinc-600 text-white font-semibold text-sm border border-zinc-700/80 transition flex items-center gap-1.5 shrink-0 cursor-pointer">
+            <i data-lucide="log-in" class="w-4 h-4 text-emerald-400"></i>
+            <span>参加</span>
+          </button>
+        </form>
+      </div>
+
+      <!-- 通話中・呼び出し中のアクションエリア（簡易テキストチャット & 切断ボタン） -->
+      <div id="incall-controls" class="hidden flex flex-col gap-3">
+        <!-- ルーム内テキストチャット -->
+        <div class="bg-zinc-950/90 border border-zinc-800/90 rounded-2xl p-3 flex flex-col gap-2">
+          <div class="flex items-center justify-between text-[11px] text-zinc-400 px-1">
+            <span class="flex items-center gap-1.5 font-medium text-zinc-300">
+              <i data-lucide="message-square" class="w-3.5 h-3.5 text-emerald-400"></i>
+              <span>ルーム内チャット</span>
+            </span>
+            <span id="sync-mode-label" class="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400">準備中</span>
+          </div>
+          <div id="chat-messages" class="h-24 overflow-y-auto flex flex-col gap-1.5 px-1 py-1 text-xs">
+            <p id="chat-empty-hint" class="text-zinc-500 text-[11px] text-center my-auto">メッセージを送って接続を確認できます</p>
+          </div>
+          <form id="chat-form" class="flex gap-1.5">
+            <input
+              id="chat-input"
+              type="text"
+              placeholder="メッセージを入力..."
+              autocomplete="off"
+              class="flex-1 bg-zinc-900 border border-zinc-800 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs text-white placeholder-zinc-500 outline-none"
+            />
+            <button type="submit" class="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition flex items-center justify-center shrink-0 cursor-pointer">
+              <i data-lucide="send" class="w-3.5 h-3.5"></i>
+            </button>
+          </form>
+        </div>
+
+        <button id="hangup-btn" type="button" class="w-full py-3.5 px-6 rounded-2xl bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-bold text-sm shadow-lg shadow-rose-950/50 transition flex items-center justify-center gap-2 cursor-pointer">
+          <i data-lucide="phone-off" class="w-5 h-5"></i>
+          <span>通話を終了する</span>
+        </button>
+      </div>
+
+    </section>
+  </main>
+
+  <!-- トースト通知用コンテナ -->
+  <div id="toast-container" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-2 pointer-events-none w-full max-w-sm px-4"></div>
+
+  <!-- Firebase & WebRTC アプリケーションロジック -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import {
+      getFirestore,
+      doc,
+      setDoc,
+      getDoc,
+      updateDoc,
+      onSnapshot,
+      collection,
+      addDoc
+    } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+    if (window.lucide) {
+      window.lucide.createIcons();
+    }
+
+    // ==========================================
+    // 1. Firebase 初期化と安全な認証設定
+    // ==========================================
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-webrtc-app';
+    let firebaseConfig = null;
+    try {
+      if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+        firebaseConfig = JSON.parse(__firebase_config);
+      }
+    } catch (e) {
+      console.error("Firebase設定のパースに失敗しました:", e);
+    }
+
+    let app = null;
+    let auth = null;
+    let db = null;
+    let currentUser = null;
+    let firebaseInitError = null;
+
+    if (firebaseConfig && firebaseConfig.apiKey) {
+      try {
+        app = initializeApp(firebaseConfig);
+        auth = getAuth(app);
+        db = getFirestore(app);
+      } catch (e) {
+        firebaseInitError = e;
+        console.error("Firebase初期化エラー:", e);
+      }
+    } else {
+      firebaseInitError = new Error("Firebase設定が見つかりません");
+    }
+
+    function withTimeout(promise, ms, errorMessage) {
+      let timer;
+      const timeoutPromise = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(errorMessage)), ms);
+      });
+      return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
+    }
+
+    async function ensureAuth() {
+      if (!auth) return null;
+      if (currentUser) return currentUser;
+      if (auth.currentUser) {
+        currentUser = auth.currentUser;
+        return currentUser;
+      }
+
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          try {
+            const cred = await withTimeout(
+              signInWithCustomToken(auth, __initial_auth_token),
+              6000,
+              "カスタムトークン認証がタイムアウトしました"
+            );
+            currentUser = cred.user;
+            return currentUser;
+          } catch (tokenErr) {
+            console.warn("カスタムトークン認証失敗、匿名認証へフォールバックします:", tokenErr);
+          }
+        }
+
+        const cred = await withTimeout(
+          signInAnonymously(auth),
+          6000,
+          "匿名認証がタイムアウトしました"
+        );
+        currentUser = cred.user;
+        return currentUser;
+      } catch (err) {
+        console.error("Firebase認証エラー:", err);
+        throw err;
+      }
+    }
+
+    // ==========================================
+    // 2. アプリケーション状態とDOM参照
+    // ==========================================
+    const state = {
+      mode: 'voice',
+      micEnabled: true,
+      camEnabled: false,
+      callStatus: 'idle',
+      roomId: null,
+      isCreator: false,
+      cloudSynced: false,
+      localStream: null,
+      remoteStream: null,
+      peerConnection: null,
+      unsubscribers: [],
+      timerInterval: null,
+      callSeconds: 0,
+      hasMediaPermission: false,
+      senderId: Math.random().toString(36).substring(2, 8)
+    };
+
+    const rtcConfig = {
+      iceServers: [
+        { urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }
+      ],
+      iceCandidatePoolSize: 10
+    };
+
+    const el = {
+      statusDot: document.getElementById('status-dot'),
+      statusText: document.getElementById('status-text'),
+      callTimer: document.getElementById('call-timer'),
+      permissionBanner: document.getElementById('permission-banner'),
+      permissionTitle: document.getElementById('permission-title'),
+      permissionDesc: document.getElementById('permission-desc'),
+      diagnosticBanner: document.getElementById('diagnostic-banner'),
+      diagnosticTitle: document.getElementById('diagnostic-title'),
+      diagnosticMessage: document.getElementById('diagnostic-message'),
+      retrySyncBtn: document.getElementById('retry-sync-btn'),
+      remoteVideo: document.getElementById('remote-video'),
+      remotePlaceholder: document.getElementById('remote-placeholder'),
+      avatarPulse: document.getElementById('avatar-pulse'),
+      remoteStatusLabel: document.getElementById('remote-status-label'),
+      remoteSubLabel: document.getElementById('remote-sub-label'),
+      localVideo: document.getElementById('local-video'),
+      localPlaceholder: document.getElementById('local-placeholder'),
+      localMuteBadge: document.getElementById('local-mute-badge'),
+      activeRoomBar: document.getElementById('active-room-bar'),
+      displayRoomId: document.getElementById('display-room-id'),
+      copyIdBtn: document.getElementById('copy-id-btn'),
+      copyUrlBtn: document.getElementById('copy-url-btn'),
+      modeVoiceBtn: document.getElementById('mode-voice-btn'),
+      modeVideoBtn: document.getElementById('mode-video-btn'),
+      toggleMicBtn: document.getElementById('toggle-mic-btn'),
+      toggleCamBtn: document.getElementById('toggle-cam-btn'),
+      lobbyControls: document.getElementById('lobby-controls'),
+      incallControls: document.getElementById('incall-controls'),
+      createRoomBtn: document.getElementById('create-room-btn'),
+      joinRoomForm: document.getElementById('join-room-form'),
+      roomIdInput: document.getElementById('room-id-input'),
+      hangupBtn: document.getElementById('hangup-btn'),
+      syncModeLabel: document.getElementById('sync-mode-label'),
+      chatMessages: document.getElementById('chat-messages'),
+      chatForm: document.getElementById('chat-form'),
+      chatInput: document.getElementById('chat-input'),
+      toastContainer: document.getElementById('toast-container')
+    };
+
+    // ==========================================
+    // 3. UIヘルパー関数（安全なDOM構築）
+    // ==========================================
+    function refreshIcons() {
+      if (window.lucide) {
+        window.lucide.createIcons();
+      }
+    }
+
+    function setButtonIcon(buttonEl, iconName, iconClass) {
+      buttonEl.textContent = '';
+      const icon = document.createElement('i');
+      icon.setAttribute('data-lucide', iconName);
+      icon.className = iconClass;
+      buttonEl.appendChild(icon);
+    }
+
+    function showToast(message, type = 'info') {
+      const toast = document.createElement('div');
+      const colors = {
+        info: 'bg-zinc-800 border-zinc-700 text-zinc-100',
+        success: 'bg-emerald-950/95 border-emerald-500/40 text-emerald-200',
+        error: 'bg-rose-950/95 border-rose-500/40 text-rose-200'
+      };
+      toast.className = 'px-4 py-2.5 rounded-2xl border shadow-xl text-xs font-medium backdrop-blur-md transition-all duration-300 transform translate-y-2 opacity-0 ' + (colors[type] || colors.info);
+      toast.textContent = message;
+      el.toastContainer.appendChild(toast);
+
+      requestAnimationFrame(() => {
+        toast.classList.remove('translate-y-2', 'opacity-0');
+      });
+
+      setTimeout(() => {
+        toast.classList.add('opacity-0', 'translate-y-2');
+        setTimeout(() => toast.remove(), 300);
+      }, 3500);
+    }
+
+    function showDiagnostic(title, message, showRetry = false) {
+      el.diagnosticTitle.textContent = title;
+      el.diagnosticMessage.textContent = message;
+      if (showRetry) {
+        el.retrySyncBtn.classList.remove('hidden');
+      } else {
+        el.retrySyncBtn.classList.add('hidden');
+      }
+      el.diagnosticBanner.classList.remove('hidden');
+      refreshIcons();
+    }
+
+    function hideDiagnostic() {
+      el.diagnosticBanner.classList.add('hidden');
+    }
+
+    function copyTextToClipboard(text, successMsg) {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        document.execCommand('copy');
+        showToast(successMsg, 'success');
+      } catch (err) {
+        showToast('コピーに失敗しました', 'error');
+      }
+      document.body.removeChild(textarea);
+    }
+
+    function updateCallStatus(status) {
+      state.callStatus = status;
+
+      if (status === 'idle') {
+        el.statusDot.className = 'w-2 h-2 rounded-full bg-zinc-500';
+        el.statusText.textContent = '待機中';
+        el.callTimer.classList.add('hidden');
+        el.lobbyControls.classList.remove('hidden');
+        el.incallControls.classList.add('hidden');
+        el.activeRoomBar.classList.add('hidden');
+        el.avatarPulse.classList.add('hidden');
+        el.remoteStatusLabel.textContent = '通話相手を待っています';
+        el.remoteSubLabel.textContent = 'ルームを作成するか、IDを入力して参加してください';
+        hideDiagnostic();
+        stopTimer();
+      } else if (status === 'creating') {
+        el.statusDot.className = 'w-2 h-2 rounded-full bg-sky-400 animate-ping';
+        el.statusText.textContent = 'ルーム作成中';
+        el.lobbyControls.classList.add('hidden');
+        el.incallControls.classList.remove('hidden');
+        el.activeRoomBar.classList.remove('hidden');
+        el.avatarPulse.classList.remove('hidden');
+        el.remoteStatusLabel.textContent = 'ルームを作成中...';
+        el.remoteSubLabel.textContent = 'サーバーと接続しています。少々お待ちください';
+        el.syncModeLabel.textContent = '接続中...';
+        el.syncModeLabel.className = 'text-[10px] px-2 py-0.5 rounded-full bg-sky-500/20 text-sky-300';
+      } else if (status === 'calling') {
+        el.statusDot.className = 'w-2 h-2 rounded-full bg-amber-400 animate-ping';
+        el.statusText.textContent = '呼び出し中';
+        el.lobbyControls.classList.add('hidden');
+        el.incallControls.classList.remove('hidden');
+        el.activeRoomBar.classList.remove('hidden');
+        el.avatarPulse.classList.remove('hidden');
+        el.remoteStatusLabel.textContent = '相手の参加を待っています...';
+        el.remoteSubLabel.textContent = 'ルームIDまたはURLを相手に共有してください';
+      } else if (status === 'connected') {
+        el.statusDot.className = 'w-2 h-2 rounded-full bg-emerald-400';
+        el.statusText.textContent = '通話中';
+        el.callTimer.classList.remove('hidden');
+        el.lobbyControls.classList.add('hidden');
+        el.incallControls.classList.remove('hidden');
+        el.activeRoomBar.classList.remove('hidden');
+        el.avatarPulse.classList.remove('hidden');
+        el.remoteStatusLabel.textContent = '通話中';
+        el.remoteSubLabel.textContent = '音声・映像が接続されました';
+        startTimer();
+      }
+    }
+
+    function startTimer() {
+      stopTimer();
+      state.callSeconds = 0;
+      el.callTimer.textContent = '00:00';
+      state.timerInterval = setInterval(() => {
+        state.callSeconds++;
+        const mins = String(Math.floor(state.callSeconds / 60)).padStart(2, '0');
+        const secs = String(state.callSeconds % 60).padStart(2, '0');
+        el.callTimer.textContent = mins + ':' + secs;
+      }, 1000);
+    }
+
+    function stopTimer() {
+      if (state.timerInterval) {
+        clearInterval(state.timerInterval);
+        state.timerInterval = null;
+      }
+      state.callSeconds = 0;
+    }
+
+    function updateMediaButtonsUI() {
+      if (state.mode === 'voice') {
+        el.modeVoiceBtn.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition bg-emerald-600 text-white shadow';
+        el.modeVideoBtn.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition text-zinc-400 hover:text-zinc-200';
+      } else {
+        el.modeVideoBtn.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition bg-emerald-600 text-white shadow';
+        el.modeVoiceBtn.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition text-zinc-400 hover:text-zinc-200';
+      }
+
+      if (state.micEnabled) {
+        el.toggleMicBtn.className = 'w-10 h-10 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white flex items-center justify-center transition active:scale-95 border border-zinc-700/70';
+        setButtonIcon(el.toggleMicBtn, 'mic', 'w-4 h-4');
+        el.localMuteBadge.classList.add('hidden');
+      } else {
+        el.toggleMicBtn.className = 'w-10 h-10 rounded-xl bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 flex items-center justify-center transition active:scale-95 border border-rose-500/40';
+        setButtonIcon(el.toggleMicBtn, 'mic-off', 'w-4 h-4');
+        el.localMuteBadge.classList.remove('hidden');
+      }
+
+      if (state.camEnabled) {
+        el.toggleCamBtn.className = 'w-10 h-10 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white flex items-center justify-center transition active:scale-95 border border-zinc-700/70';
+        setButtonIcon(el.toggleCamBtn, 'video', 'w-4 h-4');
+      } else {
+        el.toggleCamBtn.className = 'w-10 h-10 rounded-xl bg-zinc-800/50 hover:bg-zinc-800 text-zinc-500 flex items-center justify-center transition active:scale-95 border border-zinc-800';
+        setButtonIcon(el.toggleCamBtn, 'video-off', 'w-4 h-4');
+      }
+
+      const hasActiveVideoTrack = state.localStream && state.localStream.getVideoTracks().some(t => t.enabled);
+      if (state.camEnabled && hasActiveVideoTrack) {
+        el.localVideo.classList.remove('hidden');
+        el.localPlaceholder.classList.add('hidden');
+      } else {
+        el.localVideo.classList.add('hidden');
+        el.localPlaceholder.classList.remove('hidden');
+      }
+
+      refreshIcons();
+    }
+
+    // ==========================================
+    // 4. カメラ・マイクの安全な段階的取得
+    // ==========================================
+    async function initLocalMedia(requestVideo = false) {
+      if (state.localStream) {
+        state.localStream.getTracks().forEach(track => track.stop());
+        state.localStream = null;
+      }
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        state.hasMediaPermission = false;
+        state.camEnabled = false;
+        el.permissionBanner.classList.remove('hidden');
+        el.permissionTitle.textContent = "受信専用モードで動作中";
+        el.permissionDesc.textContent = "この環境ではマイク・カメラが利用できないため、受信専用モード（相手の音声視聴・チャット）で動作します。";
+        updateMediaButtonsUI();
+        return null;
+      }
+
+      let stream = null;
+      let lastError = null;
+
+      if (requestVideo) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }
+          });
+        } catch (err) {
+          lastError = err;
+        }
+      }
+
+      if (!stream) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+          if (requestVideo) {
+            state.camEnabled = false;
+            showToast("カメラが利用できないため音声のみで開始しました", "info");
+          }
+        } catch (err) {
+          lastError = err;
+        }
+      }
+
+      if (stream) {
+        state.localStream = stream;
+        state.hasMediaPermission = true;
+        el.permissionBanner.classList.add('hidden');
+
+        stream.getAudioTracks().forEach(t => (t.enabled = state.micEnabled));
+        stream.getVideoTracks().forEach(t => (t.enabled = state.camEnabled));
+
+        el.localVideo.srcObject = stream;
+        updateMediaButtonsUI();
+        return stream;
+      } else {
+        state.hasMediaPermission = false;
+        state.camEnabled = false;
+        el.permissionBanner.classList.remove('hidden');
+        if (lastError && (lastError.name === 'NotAllowedError' || lastError.name === 'PermissionDeniedError')) {
+          el.permissionTitle.textContent = "マイク・カメラの権限がブロックされています";
+          el.permissionDesc.textContent = "受信専用モードで動作中です。ルームの作成・参加やチャット、相手の音声受信はそのまま行えます。";
+        } else {
+          el.permissionTitle.textContent = "マイク・カメラが見つかりません";
+          el.permissionDesc.textContent = "受信専用モードで動作中です。ルームの作成・参加やチャットは問題なく利用できます。";
+        }
+        updateMediaButtonsUI();
+        return null;
+      }
+    }
+
+    async function setCallMode(newMode) {
+      if (state.mode === newMode) return;
+      state.mode = newMode;
+
+      if (newMode === 'voice') {
+        state.camEnabled = false;
+        if (state.localStream) {
+          state.localStream.getVideoTracks().forEach(t => (t.enabled = false));
+        }
+        updateMediaButtonsUI();
+      } else {
+        state.camEnabled = true;
+        const hasVideoTrack = state.localStream && state.localStream.getVideoTracks().length > 0;
+        if (!hasVideoTrack) {
+          const newStream = await initLocalMedia(true);
+          if (newStream && state.peerConnection) {
+            const videoTrack = newStream.getVideoTracks()[0];
+            if (videoTrack) {
+              const sender = state.peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+              if (sender) {
+                await sender.replaceTrack(videoTrack);
+              } else {
+                state.peerConnection.addTrack(videoTrack, newStream);
+              }
+            }
+          }
+        } else {
+          state.localStream.getVideoTracks().forEach(t => (t.enabled = true));
+          updateMediaButtonsUI();
+        }
+      }
+    }
+
+    async function toggleMic() {
+      if (!state.localStream) {
+        await initLocalMedia(state.camEnabled);
+      }
+      state.micEnabled = !state.micEnabled;
+      if (state.localStream) {
+        state.localStream.getAudioTracks().forEach(t => (t.enabled = state.micEnabled));
+      }
+      updateMediaButtonsUI();
+    }
+
+    async function toggleCam() {
+      if (!state.camEnabled) {
+        state.mode = 'video';
+        state.camEnabled = true;
+        const hasVideoTrack = state.localStream && state.localStream.getVideoTracks().length > 0;
+        if (!hasVideoTrack) {
+          const newStream = await initLocalMedia(true);
+          if (newStream && state.peerConnection) {
+            const videoTrack = newStream.getVideoTracks()[0];
+            if (videoTrack) {
+              const sender = state.peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+              if (sender) {
+                await sender.replaceTrack(videoTrack);
+              } else {
+                state.peerConnection.addTrack(videoTrack, newStream);
+              }
+            }
+          }
+        } else {
+          state.localStream.getVideoTracks().forEach(t => (t.enabled = true));
+          updateMediaButtonsUI();
+        }
+      } else {
+        state.camEnabled = false;
+        if (state.localStream) {
+          state.localStream.getVideoTracks().forEach(t => (t.enabled = false));
+        }
+        updateMediaButtonsUI();
+      }
+    }
+
+    // ==========================================
+    // 5. WebRTC & Firestore シグナリング処理
+    // ==========================================
+    function setupPeerConnection() {
+      if (state.peerConnection) {
+        try { state.peerConnection.close(); } catch (e) {}
+      }
+      const pc = new RTCPeerConnection(rtcConfig);
+      state.peerConnection = pc;
+
+      const audioTracks = state.localStream ? state.localStream.getAudioTracks() : [];
+      const videoTracks = state.localStream ? state.localStream.getVideoTracks() : [];
+
+      if (audioTracks.length > 0) {
+        audioTracks.forEach(track => pc.addTrack(track, state.localStream));
+      } else {
+        pc.addTransceiver('audio', { direction: 'recvonly' });
+      }
+
+      if (videoTracks.length > 0) {
+        videoTracks.forEach(track => pc.addTrack(track, state.localStream));
+      } else {
+        pc.addTransceiver('video', { direction: 'recvonly' });
+      }
+
+      const remoteStream = new MediaStream();
+      state.remoteStream = remoteStream;
+      el.remoteVideo.srcObject = remoteStream;
+
+      pc.ontrack = (event) => {
+        if (event.streams && event.streams[0]) {
+          event.streams[0].getTracks().forEach(track => {
+            if (!remoteStream.getTracks().includes(track)) {
+              remoteStream.addTrack(track);
+            }
+          });
+        } else if (event.track) {
+          remoteStream.addTrack(event.track);
+        }
+        checkRemoteVideoVisibility();
+      };
+
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === 'connected') {
+          updateCallStatus('connected');
+          hideDiagnostic();
+          showToast('通話が接続されました！', 'success');
+        } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+          if (state.callStatus === 'connected') {
+            showToast('通話が切断されました', 'info');
+            hangUp(false);
+          }
+        }
+      };
+
+      return pc;
+    }
+
+    function checkRemoteVideoVisibility() {
+      if (!state.remoteStream) return;
+      const videoTracks = state.remoteStream.getVideoTracks();
+      const hasLiveVideo = videoTracks.length > 0 && videoTracks.some(t => t.readyState === 'live');
+      if (hasLiveVideo) {
+        el.remoteVideo.classList.remove('hidden');
+        el.remotePlaceholder.classList.add('hidden');
+      } else {
+        el.remoteVideo.classList.add('hidden');
+        el.remotePlaceholder.classList.remove('hidden');
+      }
+    }
+
+    function generateShortRoomId() {
+      const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
+      let result = '';
+      for (let i = 0; i < 6; i++) {
+        result += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      return result;
+    }
+
+    function resetChatUI() {
+      el.chatMessages.textContent = '';
+      const hint = document.createElement('p');
+      hint.className = 'text-zinc-500 text-[11px] text-center my-auto';
+      hint.textContent = 'メッセージを送って接続を確認できます';
+      el.chatMessages.appendChild(hint);
+    }
+
+    function appendChatMessage(text, isMine) {
+      const hint = el.chatMessages.querySelector('p');
+      if (hint) hint.remove();
+
+      const wrapper = document.createElement('div');
+      wrapper.className = isMine ? 'flex flex-col items-end' : 'flex flex-col items-start';
+
+      const bubble = document.createElement('div');
+      bubble.className = isMine
+        ? 'bg-emerald-600/90 text-white px-2.5 py-1.5 rounded-2xl rounded-tr-sm max-w-[85%] break-words'
+        : 'bg-zinc-800 text-zinc-100 px-2.5 py-1.5 rounded-2xl rounded-tl-sm max-w-[85%] break-words border border-zinc-700/60';
+      bubble.textContent = text;
+
+      wrapper.appendChild(bubble);
+      el.chatMessages.appendChild(wrapper);
+      el.chatMessages.scrollTop = el.chatMessages.scrollHeight;
+    }
+
+    function subscribeRoomChat(roomId) {
+      if (!db || !currentUser) return;
+      const messagesCol = collection(db, 'artifacts', appId, 'public', 'data', 'webrtc_rooms', roomId, 'messages');
+      const unsubChat = onSnapshot(messagesCol, (snapshot) => {
+        const docs = [];
+        snapshot.forEach(d => docs.push({ id: d.id, ...d.data() }));
+        docs.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+
+        if (docs.length === 0) {
+          resetChatUI();
+          return;
+        }
+        el.chatMessages.textContent = '';
+        docs.forEach(msg => {
+          appendChatMessage(msg.text, msg.senderId === state.senderId);
+        });
+      }, (err) => {
+        console.warn("チャット監視エラー:", err);
+      });
+      state.unsubscribers.push(unsubChat);
+    }
+
+    // 【発信側】新しい通話ルームを作成
+    async function createRoom() {
+      if (state.callStatus !== 'idle') return;
+
+      const roomId = generateShortRoomId();
+      state.roomId = roomId;
+      state.isCreator = true;
+      state.cloudSynced = false;
+      el.displayRoomId.textContent = roomId;
+      resetChatUI();
+      hideDiagnostic();
+      updateCallStatus('creating');
+
+      try {
+        if (!state.localStream && !state.hasMediaPermission) {
+          await initLocalMedia(state.mode === 'video');
+        }
+
+        if (state.roomId !== roomId) return;
+
+        const pc = setupPeerConnection();
+        const pendingIceCandidates = [];
+
+        pc.onicecandidate = async (event) => {
+          if (event.candidate) {
+            const candidateData = event.candidate.toJSON();
+            if (state.cloudSynced && db && currentUser) {
+              try {
+                const offerCandidatesCol = collection(db, 'artifacts', appId, 'public', 'data', 'webrtc_rooms', roomId, 'offerCandidates');
+                await addDoc(offerCandidatesCol, candidateData);
+              } catch (e) {
+                console.warn("Offer ICE送信エラー:", e);
+              }
+            } else {
+              pendingIceCandidates.push(candidateData);
+            }
+          }
+        };
+
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+
+        if (state.roomId !== roomId) return;
+
+        if (!db || firebaseInitError) {
+          throw new Error("データベース接続設定が有効ではありません（ローカル待機モード）");
+        }
+
+        const user = await ensureAuth();
+        if (!user) {
+          throw new Error("サーバー認証が完了できませんでした");
+        }
+
+        if (state.roomId !== roomId) return;
+
+        const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'webrtc_rooms', roomId);
+        const offerCandidatesCol = collection(db, 'artifacts', appId, 'public', 'data', 'webrtc_rooms', roomId, 'offerCandidates');
+        const answerCandidatesCol = collection(db, 'artifacts', appId, 'public', 'data', 'webrtc_rooms', roomId, 'answerCandidates');
+
+        await withTimeout(
+          setDoc(roomRef, {
+            offer: {
+              type: offer.type,
+              sdp: offer.sdp
+            },
+            createdAt: Date.now(),
+            creatorUid: user.uid,
+            status: 'waiting'
+          }),
+          7000,
+          "データベースへのルーム登録がタイムアウトしました"
+        );
+
+        state.cloudSynced = true;
+        el.syncModeLabel.textContent = 'オンライン同期中';
+        el.syncModeLabel.className = 'text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30';
+
+        for (const cand of pendingIceCandidates) {
+          addDoc(offerCandidatesCol, cand).catch(() => {});
+        }
+        pendingIceCandidates.length = 0;
+
+        const unsubRoom = onSnapshot(roomRef, async (snapshot) => {
+          const data = snapshot.data();
+          if (!data) return;
+
+          if (data.status === 'ended') {
+            showToast('相手が通話を終了しました', 'info');
+            hangUp(false);
+            return;
+          }
+
+          if (!pc.currentRemoteDescription && data.answer) {
+            try {
+              const rtcSessionDescription = new RTCSessionDescription(data.answer);
+              await pc.setRemoteDescription(rtcSessionDescription);
+            } catch (e) {
+              console.error("RemoteDescription設定エラー:", e);
+            }
+          }
+        }, (err) => {
+          console.error("ルーム監視エラー:", err);
+          showDiagnostic("同期エラー", "ルーム状態の監視中に通信エラーが発生しました。", true);
+        });
+
+        const unsubAnswerCandidates = onSnapshot(answerCandidatesCol, (snapshot) => {
+          snapshot.docChanges().forEach(async (change) => {
+            if (change.type === 'added') {
+              const data = change.doc.data();
+              try {
+                await pc.addIceCandidate(new RTCIceCandidate(data));
+              } catch (e) {
+                console.warn("Answer ICE追加エラー:", e);
+              }
+            }
+          });
+        }, (err) => {
+          console.warn("Answer ICE監視エラー:", err);
+        });
+
+        state.unsubscribers.push(unsubRoom, unsubAnswerCandidates);
+        subscribeRoomChat(roomId);
+
+        updateCallStatus('calling');
+        showToast('ルーム「' + roomId + '」を作成しました！', 'success');
+
+      } catch (err) {
+        console.error("ルーム作成中のエラー:", err);
+        if (state.roomId === roomId) {
+          updateCallStatus('calling');
+          el.syncModeLabel.textContent = 'オフライン/制限モード';
+          el.syncModeLabel.className = 'text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30';
+          showDiagnostic(
+            "サーバー同期に制限があります",
+            (err.message || "ネットワークまたは認証の制限によりサーバーへ登録できませんでした。") + "（右の「再接続」で再試行できます）",
+            true
+          );
+          showToast("ルームIDを発行しましたが、サーバー同期に失敗しました", "error");
+        }
+      }
+    }
+
+    async function retryCloudSync() {
+      if (!state.roomId || !state.isCreator) return;
+      const roomId = state.roomId;
+      hideDiagnostic();
+      updateCallStatus('creating');
+      try {
+        if (!db) throw new Error("データベースが利用できません");
+        const user = await ensureAuth();
+        if (!user) throw new Error("認証に失敗しました");
+
+        const pc = state.peerConnection || setupPeerConnection();
+        if (!pc.localDescription) {
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+        }
+
+        const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'webrtc_rooms', roomId);
+        await withTimeout(
+          setDoc(roomRef, {
+            offer: {
+              type: pc.localDescription.type,
+              sdp: pc.localDescription.sdp
+            },
+            createdAt: Date.now(),
+            creatorUid: user.uid,
+            status: 'waiting'
+          }),
+          7000,
+          "再接続がタイムアウトしました"
+        );
+
+        state.cloudSynced = true;
+        el.syncModeLabel.textContent = 'オンライン同期中';
+        el.syncModeLabel.className = 'text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30';
+        subscribeRoomChat(roomId);
+        updateCallStatus('calling');
+        showToast("サーバーとの同期に成功しました！", "success");
+      } catch (err) {
+        updateCallStatus('calling');
+        showDiagnostic("再接続に失敗しました", err.message || "通信環境を確認してください。", true);
+        showToast("再接続に失敗しました", "error");
+      }
+    }
+
+    // 【着信側】既存のルームIDを入力して参加
+    async function joinRoom(inputRoomId) {
+      const roomId = inputRoomId.trim().toLowerCase();
+      if (!roomId) {
+        showToast("ルームIDを入力してください", "error");
+        return;
+      }
+
+      if (!db || firebaseInitError) {
+        showToast("データベース接続が利用できないため参加できません", "error");
+        return;
+      }
+
+      state.roomId = roomId;
+      state.isCreator = false;
+      state.cloudSynced = false;
+      el.displayRoomId.textContent = roomId;
+      resetChatUI();
+      hideDiagnostic();
+      updateCallStatus('creating');
+      el.remoteStatusLabel.textContent = 'ルームを検索中...';
+
+      try {
+        const user = await ensureAuth();
+        if (!user) throw new Error("サーバー認証に失敗しました");
+
+        if (!state.localStream && !state.hasMediaPermission) {
+          await initLocalMedia(state.mode === 'video');
+        }
+
+        if (state.roomId !== roomId) return;
+
+        const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'webrtc_rooms', roomId);
+        const roomSnap = await withTimeout(getDoc(roomRef), 7000, "ルーム検索がタイムアウトしました");
+
+        if (!roomSnap.exists()) {
+          showToast('ルームID「' + roomId + '」が見つかりません', "error");
+          hangUp(false);
+          return;
+        }
+
+        const roomData = roomSnap.data();
+        if (roomData.status === 'ended') {
+          showToast("この通話はすでに終了しています", "error");
+          hangUp(false);
+          return;
+        }
+
+        const offerCandidatesCol = collection(db, 'artifacts', appId, 'public', 'data', 'webrtc_rooms', roomId, 'offerCandidates');
+        const answerCandidatesCol = collection(db, 'artifacts', appId, 'public', 'data', 'webrtc_rooms', roomId, 'answerCandidates');
+
+        const pc = setupPeerConnection();
+
+        pc.onicecandidate = async (event) => {
+          if (event.candidate) {
+            try {
+              await addDoc(answerCandidatesCol, event.candidate.toJSON());
+            } catch (e) {
+              console.warn("Answer ICE保存エラー:", e);
+            }
+          }
+        };
+
+        const offer = roomData.offer;
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        await updateDoc(roomRef, {
+          answer: {
+            type: answer.type,
+            sdp: answer.sdp
+          },
+          status: 'connected',
+          calleeUid: user.uid
+        });
+
+        state.cloudSynced = true;
+        el.syncModeLabel.textContent = 'オンライン同期中';
+        el.syncModeLabel.className = 'text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30';
+        updateCallStatus('calling');
+        el.remoteStatusLabel.textContent = 'P2P接続を確立中...';
+
+        const unsubRoom = onSnapshot(roomRef, (snapshot) => {
+          const data = snapshot.data();
+          if (data && data.status === 'ended') {
+            showToast('相手が通話を終了しました', 'info');
+            hangUp(false);
+          }
+        }, (err) => {
+          console.error("ルーム監視エラー:", err);
+        });
+
+        const unsubOfferCandidates = onSnapshot(offerCandidatesCol, (snapshot) => {
+          snapshot.docChanges().forEach(async (change) => {
+            if (change.type === 'added') {
+              const data = change.doc.data();
+              try {
+                await pc.addIceCandidate(new RTCIceCandidate(data));
+              } catch (e) {
+                console.warn("Offer ICE追加エラー:", e);
+              }
+            }
+          });
+        }, (err) => {
+          console.warn("Offer ICE監視エラー:", err);
+        });
+
+        state.unsubscribers.push(unsubRoom, unsubOfferCandidates);
+        subscribeRoomChat(roomId);
+
+      } catch (err) {
+        console.error("ルーム参加エラー:", err);
+        showToast(err.message || "通話への参加に失敗しました", "error");
+        hangUp(false);
+      }
+    }
+
+    async function hangUp(notifyRemote = true) {
+      const targetRoomId = state.roomId;
+      const wasSynced = state.cloudSynced;
+      state.roomId = null;
+      state.cloudSynced = false;
+
+      state.unsubscribers.forEach(unsub => {
+        try { unsub(); } catch (e) {}
+      });
+      state.unsubscribers = [];
+
+      if (notifyRemote && wasSynced && targetRoomId && db && currentUser) {
+        try {
+          const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'webrtc_rooms', targetRoomId);
+          await updateDoc(roomRef, { status: 'ended' });
+        } catch (e) {
+          console.warn("終了ステータス更新スキップ:", e);
+        }
+      }
+
+      if (state.peerConnection) {
+        try { state.peerConnection.close(); } catch (e) {}
+        state.peerConnection = null;
+      }
+
+      if (state.remoteStream) {
+        state.remoteStream.getTracks().forEach(t => t.stop());
+        state.remoteStream = null;
+      }
+      el.remoteVideo.srcObject = null;
+      el.remoteVideo.classList.add('hidden');
+      el.remotePlaceholder.classList.remove('hidden');
+
+      updateCallStatus('idle');
+    }
+
+    // ==========================================
+    // 6. イベントリスナー登録と初期化
+    // ==========================================
+    el.modeVoiceBtn.addEventListener('click', () => setCallMode('voice'));
+    el.modeVideoBtn.addEventListener('click', () => setCallMode('video'));
+    el.toggleMicBtn.addEventListener('click', toggleMic);
+    el.toggleCamBtn.addEventListener('click', toggleCam);
+
+    el.createRoomBtn.addEventListener('click', createRoom);
+    el.retrySyncBtn.addEventListener('click', retryCloudSync);
+
+    el.joinRoomForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      joinRoom(el.roomIdInput.value);
+    });
+
+    el.chatForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const text = el.chatInput.value.trim();
+      if (!text || !state.roomId) return;
+      el.chatInput.value = '';
+
+      if (state.cloudSynced && db && currentUser) {
+        try {
+          const messagesCol = collection(db, 'artifacts', appId, 'public', 'data', 'webrtc_rooms', state.roomId, 'messages');
+          await addDoc(messagesCol, {
+            text,
+            senderId: state.senderId,
+            uid: currentUser.uid,
+            createdAt: Date.now()
+          });
+        } catch (err) {
+          appendChatMessage(text, true);
+          showToast("メッセージの同期に失敗しました", "error");
+        }
+      } else {
+        appendChatMessage(text, true);
+      }
+    });
+
+    el.hangupBtn.addEventListener('click', () => {
+      hangUp(true);
+      showToast('通話を終了しました', 'info');
+    });
+
+    el.copyIdBtn.addEventListener('click', () => {
+      if (state.roomId) {
+        copyTextToClipboard(state.roomId, 'ルームID「' + state.roomId + '」をコピーしました');
+      }
+    });
+
+    el.copyUrlBtn.addEventListener('click', () => {
+      if (state.roomId) {
+        const url = new URL(window.location.href);
+        url.searchParams.set('room', state.roomId);
+        copyTextToClipboard(url.toString(), '招待URLをコピーしました');
+      }
+    });
+
+    window.addEventListener('DOMContentLoaded', () => {
+      refreshIcons();
+      ensureAuth().catch(() => {});
+      initLocalMedia(false);
+
+      const params = new URLSearchParams(window.location.search);
+      const roomParam = params.get('room');
+      if (roomParam) {
+        el.roomIdInput.value = roomParam;
+        showToast('ルームID「' + roomParam + '」が入力されました。「参加」を押してください', 'info');
+      }
+    });
+  </script>
+</body>
+</html>
